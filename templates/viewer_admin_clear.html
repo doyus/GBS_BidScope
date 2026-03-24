@@ -1,0 +1,48 @@
+{% extends "viewer_base.html" %}
+{% block title %}清空数据库{% endblock %}
+{% block extra_css %}
+<style>
+  .warn { background: #3d2115; border: 1px solid #f85149; border-radius: 8px; padding: 16px; margin-bottom: 20px; }
+  .warn h2 { color: #f85149; margin: 0 0 10px; font-size: 16px; }
+  .counts { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 14px; margin-bottom: 20px; font-size: 13px; }
+  .counts li { margin: 6px 0; }
+  form label { display: block; margin: 12px 0 6px; color: var(--muted); }
+  form input[type="text"] { width: 100%; max-width: 320px; }
+  .danger { background: #da3633 !important; }
+  .danger:hover { filter: brightness(1.08); }
+</style>
+{% endblock %}
+{% block body %}
+<nav class="nav">
+  <a href="{{ url_for('index') }}">← 返回列表</a>
+</nav>
+<h1>手动清空数据库</h1>
+
+<div class="warn">
+  <h2>不可恢复</h2>
+  <p>将删除 <strong>所有已入库正文</strong>、<strong>Excel 元数据</strong>，以及爬虫辅助表：</p>
+  <ul style="margin:8px 0;padding-left:20px;">
+    <li><code>crawl_url_dedup</code>（URL 去重）</li>
+    <li><code>domain_learned_xpath</code> / <code>domain_json_html_path</code>（大模型学到的路径缓存）</li>
+  </ul>
+  <p class="muted" style="margin-bottom:0;">清空后需重新运行 <code>crawl_update_content.py</code> 才能再有数据。</p>
+</div>
+
+<div class="counts">
+  <strong>当前各表行数</strong>
+  <ul style="list-style:none;padding-left:0;">
+    {% for t, n in counts.items() %}
+    <li><code>{{ t }}</code>：{% if n < 0 %}（无此表）{% else %}{{ n }}{% endif %}</li>
+    {% endfor %}
+  </ul>
+  <p class="muted" style="margin:0;">库文件：{{ db_file }}</p>
+</div>
+
+<form method="post" onsubmit="return confirm('确定要清空全部数据？此操作无法撤销。');">
+  <label>输入 <strong style="color:#f85149;">{{ confirm_word }}</strong> 以确认：</label>
+  <input type="text" name="confirm" autocomplete="off" placeholder="在此输入：{{ confirm_word }}" required>
+  <p style="margin-top:16px;">
+    <button type="submit" class="btn danger">执行清空</button>
+  </p>
+</form>
+{% endblock %}

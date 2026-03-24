@@ -1,0 +1,8 @@
+{% extends "viewer_base.html" %}
+{% block title %}错误{% endblock %}
+{% block body %}
+<h1>无法连接数据库</h1>
+<p class="muted">{{ error }}</p>
+<p>请先运行抓取脚本生成 <code>crawl_local.db</code>，或设置环境变量 <code>SQLITE_DB</code>。</p>
+<a href="{{ url_for('index') }}">重试</a>
+{% endblock %}

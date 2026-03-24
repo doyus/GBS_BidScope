@@ -1,0 +1,270 @@
+{% extends "viewer_base.html" %}
+{% block title %}数据分析仪表盘{% endblock %}
+{% block extra_css %}
+<style>
+  .dashboard { padding: 20px; }
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+  .stat-card {
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    padding: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+  .stat-card h3 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #586069;
+    font-weight: normal;
+  }
+  .stat-value {
+    font-size: 28px;
+    font-weight: 600;
+    color: #24292e;
+  }
+  .stat-sub {
+    font-size: 12px;
+    color: #6a737d;
+    margin-top: 4px;
+  }
+  .chart-container {
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+  .chart-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: #24292e;
+  }
+  .chart-box { height: 300px; }
+  .quality-report {
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .quality-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .quality-item {
+    padding: 12px;
+    background: #f6f8fa;
+    border-radius: 6px;
+  }
+  .quality-item h4 {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    color: #24292e;
+  }
+  .success-rate { color: #28a745; }
+  .fail-rate { color: #dc3545; }
+  .warning-rate { color: #ffc107; }
+  .nav-links { margin-bottom: 20px; }
+  .nav-links a { margin-right: 16px; }
+  .two-col {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+    gap: 24px;
+  }
+</style>
+{% endblock %}
+{% block body %}
+<div class="dashboard">
+  <nav class="nav-links">
+    <a href="{{ url_for('index') }}">← 返回列表</a>
+    <a href="{{ url_for('export_page') }}">数据导出</a>
+    <a href="{{ url_for('export_report') }}">下载分析报告</a>
+  </nav>
+  
+  <h1>📊 数据分析仪表盘</h1>
+  
+  {% if report.error %}
+  <div class="alert alert-error">{{ report.error }}</div>
+  {% else %}
+  
+  <!-- 核心指标卡片 -->
+  <div class="stats-grid">
+    <div class="stat-card">
+      <h3>总记录数</h3>
+      <div class="stat-value">{{ report.content_stats.total_records }}</div>
+      <div class="stat-sub">数据总量</div>
+    </div>
+    <div class="stat-card">
+      <h3>抓取成功率</h3>
+      <div class="stat-value success-rate">{{ report.quality_report.success_rate }}%</div>
+      <div class="stat-sub">{{ report.quality_report.success_count }} / {{ report.quality_report.total_records }}</div>
+    </div>
+    <div class="stat-card">
+      <h3>来源域名数</h3>
+      <div class="stat-value">{{ report.domain_stats.total_domains }}</div>
+      <div class="stat-sub">不同数据源</div>
+    </div>
+    <div class="stat-card">
+      <h3>数据时间跨度</h3>
+      <div class="stat-value">{{ report.time_stats.total_days }}天</div>
+      <div class="stat-sub">{{ report.time_stats.date_range.start }} ~ {{ report.time_stats.date_range.end }}</div>
+    </div>
+    <div class="stat-card">
+      <h3>平均内容长度</h3>
+      <div class="stat-value">{{ report.content_stats.avg_length }}</div>
+      <div class="stat-sub">中位数: {{ report.content_stats.median_length }}</div>
+    </div>
+    <div class="stat-card">
+      <h3>近7天新增</h3>
+      <div class="stat-value">{{ report.time_stats.recent_7d_count }}</div>
+      <div class="stat-sub">近30天: {{ report.time_stats.recent_30d_count }}</div>
+    </div>
+  </div>
+  
+  <!-- 图表区域 -->
+  <div class="two-col">
+    <div class="chart-container">
+      <div class="chart-title">📈 每日抓取趋势</div>
+      <div id="dailyTrendChart" class="chart-box"></div>
+    </div>
+    
+    <div class="chart-container">
+      <div class="chart-title">🌐 各来源网站数据量 TOP15</div>
+      <div id="domainChart" class="chart-box"></div>
+    </div>
+  </div>
+  
+  <div class="two-col">
+    <div class="chart-container">
+      <div class="chart-title">📏 内容长度分布</div>
+      <div id="lengthChart" class="chart-box"></div>
+    </div>
+    
+    <div class="chart-container">
+      <div class="chart-title">✅ 抓取状态分布</div>
+      <div id="statusChart" class="chart-box"></div>
+    </div>
+  </div>
+  
+  <!-- 数据质量报告 -->
+  <div class="quality-report">
+    <div class="chart-title">📋 数据质量报告</div>
+    <div class="quality-grid">
+      <div class="quality-item">
+        <h4>抓取状态统计</h4>
+        <ul>
+          {% for status, count in report.quality_report.status_distribution.items() %}
+          <li>{{ status or '成功' }}: <strong>{{ count }}</strong></li>
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="quality-item">
+        <h4>失败原因分类</h4>
+        <ul>
+          {% for reason, count in report.quality_report.error_classification.items() %}
+          {% if count > 0 %}
+          <li>{{ reason }}: <strong>{{ count }}</strong></li>
+          {% endif %}
+          {% endfor %}
+        </ul>
+      </div>
+      <div class="quality-item">
+        <h4>内容长度统计</h4>
+        <ul>
+          <li>最小: {{ report.content_stats.min_length }}</li>
+          <li>最大: {{ report.content_stats.max_length }}</li>
+          <li>标准差: {{ report.content_stats.std_length }}</li>
+        </ul>
+      </div>
+      <div class="quality-item">
+        <h4>长度分布</h4>
+        <ul>
+          {% for range, count in report.content_stats.length_distribution.items() %}
+          <li>{{ range }}: <strong>{{ count }}</strong></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+  
+  <p class="muted" style="margin-top: 20px;">报告生成时间: {{ report.generated_at }}</p>
+  
+  {% endif %}
+</div>
+
+<!-- ECharts -->
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+<script>
+// 每日趋势图
+fetch('/api/analytics/daily-trend')
+  .then(r => r.json())
+  .then(data => {
+    const chart = echarts.init(document.getElementById('dailyTrendChart'));
+    chart.setOption({
+      tooltip: { trigger: 'axis' },
+      legend: { data: ['总数', '成功', '失败'] },
+      xAxis: { type: 'category', data: data.dates, axisLabel: { rotate: 45 } },
+      yAxis: { type: 'value' },
+      series: [
+        { name: '总数', type: 'line', data: data.total, smooth: true },
+        { name: '成功', type: 'line', data: data.success, smooth: true },
+        { name: '失败', type: 'line', data: data.failed, smooth: true }
+      ],
+      grid: { left: '3%', right: '4%', bottom: '15%', containLabel: true }
+    });
+  });
+
+// 域名统计图
+fetch('/api/analytics/domain-stats')
+  .then(r => r.json())
+  .then(data => {
+    const chart = echarts.init(document.getElementById('domainChart'));
+    chart.setOption({
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      legend: { data: ['总数', '成功', '失败'] },
+      xAxis: { type: 'category', data: data.domains, axisLabel: { rotate: 45, fontSize: 10 } },
+      yAxis: { type: 'value' },
+      series: [
+        { name: '总数', type: 'bar', data: data.total },
+        { name: '成功', type: 'bar', data: data.success },
+        { name: '失败', type: 'bar', data: data.failed }
+      ],
+      grid: { left: '3%', right: '4%', bottom: '20%', containLabel: true }
+    });
+  });
+
+// 内容长度分布图
+fetch('/api/analytics/content-length')
+  .then(r => r.json())
+  .then(data => {
+    const chart = echarts.init(document.getElementById('lengthChart'));
+    chart.setOption({
+      tooltip: { trigger: 'item' },
+      series: [{
+        type: 'pie',
+        radius: ['40%', '70%'],
+        data: data.ranges.map((r, i) => ({ name: r, value: data.counts[i] }))
+      }]
+    });
+  });
+
+// 抓取状态分布图
+const statusData = {{ report.quality_report.status_distribution | tojson }};
+const statusChart = echarts.init(document.getElementById('statusChart'));
+statusChart.setOption({
+  tooltip: { trigger: 'item' },
+  series: [{
+    type: 'pie',
+    radius: '60%',
+    data: Object.entries(statusData).map(([k, v]) => ({ name: k || '成功', value: v }))
+  }]
+});
+</script>
+{% endblock %}

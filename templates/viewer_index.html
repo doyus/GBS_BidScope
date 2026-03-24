@@ -1,0 +1,97 @@
+{% extends "viewer_base.html" %}
+{% block title %}入库列表{% endblock %}
+{% block extra_css %}
+<style>
+  .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table.data { min-width: 720px; }
+  th.key-col { white-space: nowrap; max-width: 140px; }
+  td.key-col { font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+  tr.row-failed { background: rgba(248,81,73,0.12); box-shadow: inset 3px 0 0 #f85149; }
+  tr.row-retrying { background: rgba(210,153,34,0.1); box-shadow: inset 3px 0 0 #d29922; }
+</style>
+{% endblock %}
+{% block body %}
+<nav class="nav">
+  <a href="{{ url_for('index') }}">列表</a>
+  <a href="{{ url_for('analytics_dashboard') }}">📊 数据分析</a>
+  <a href="{{ url_for('export_page') }}">📥 导出</a>
+  <a href="{{ url_for('admin_clear') }}" style="color:#f85149;">清空数据库</a>
+  <span class="muted">{{ db_file }}</span>
+</nav>
+<h1>已入库（共 {{ total }} 条）</h1>
+<p class="muted" style="margin:-8px 0 12px;">排序：<strong>按最后更新时间 · 从新到旧</strong>（同秒则 id 大的在前）</p>
+<form method="get" style="margin-bottom:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+  <input type="text" name="q" value="{{ q }}" placeholder="搜索 id / 正文 / Excel 字段" style="min-width:240px;">
+  <label class="muted">状态
+    <select name="status" onchange="this.form.submit()">
+      <option value="all" {% if status_filter == 'all' %}selected{% endif %}>全部</option>
+      <option value="ok" {% if status_filter == 'ok' %}selected{% endif %}>仅成功</option>
+      <option value="failed" {% if status_filter == 'failed' %}selected{% endif %}>仅失败</option>
+      <option value="retrying" {% if status_filter == 'retrying' %}selected{% endif %}>重试中</option>
+      <option value="problem" {% if status_filter == 'problem' %}selected{% endif %}>异常/待看</option>
+    </select>
+  </label>
+  <label class="muted">每页
+    <select name="per" onchange="this.form.submit()">
+      {% for n in [20,30,50,100] %}
+      <option value="{{ n }}" {% if per_page == n %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit" class="btn">搜索</button>
+  {% if q or status_filter != 'all' %}<a href="{{ url_for('index', per=per_page) }}" class="muted">清除筛选</a>{% endif %}
+</form>
+<p class="muted" style="margin-top:-8px;">以下为 Excel 中部分列；<strong>字数</strong>=去标签后中文+数字+字母（鼠标悬停看分项）</p>
+<div class="scroll-x">
+<table class="data">
+  <thead>
+    <tr>
+      <th style="width:88px;">ID</th>
+      {% for k in display_keys %}
+      <th class="key-col" title="{{ k }}">{{ k }}</th>
+      {% endfor %}
+      <th>正文预览</th>
+      <th style="width:72px;" title="去标签后：中文+数字+字母">字数</th>
+      <th style="width:72px;">状态</th>
+      <th style="min-width:140px;">失败/重试说明</th>
+      <th style="width:150px;">入库时间</th>
+      <th style="width:88px;">操作</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr class="{{ r.status_class }}">
+      <td><strong>{{ r.id }}</strong></td>
+      {% for k in display_keys %}
+      <td class="key-col muted" title="{{ r.cells.get(k,'') }}">{{ r.cells.get(k,'—') }}</td>
+      {% endfor %}
+      <td class="muted" style="max-width:220px;font-size:12px;">{{ r.preview or '（空）' }}</td>
+      <td title="中{{ r.text_cn }} 数{{ r.text_digit }} 英{{ r.text_alpha }}">
+        <strong>{{ r.text_total }}</strong>
+      </td>
+      <td class="muted" style="font-size:11px;">{{ r.crawl_status }}{% if r.crawl_fail_count %}×{{ r.crawl_fail_count }}{% endif %}</td>
+      <td class="muted" style="font-size:11px;max-width:200px;" title="{{ r.crawl_error_full }}">{{ r.crawl_error_short }}</td>
+      <td class="muted" style="font-size:12px;">{{ r.updated }}</td>
+      <td>
+        <a href="{{ url_for('item', rid=r.id) }}" class="btn">查看</a>
+        {% if r.meta_extra_count > 0 %}
+        <span class="muted" style="font-size:11px;">+{{ r.meta_extra_count }}列</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 8 + display_keys|length }}" class="muted" style="text-align:center;padding:24px;">暂无数据</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+<div class="pager muted">
+  {% if page > 1 %}
+  <a href="{{ url_for('index', page=page-1, q=q, per=per_page, status=status_filter) }}">上一页</a>
+  {% endif %}
+  <span>第 {{ page }} / {{ pages }} 页</span>
+  {% if page < pages %}
+  <a href="{{ url_for('index', page=page+1, q=q, per=per_page, status=status_filter) }}">下一页</a>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "viewer_base.html" %}
+{% block title %}数据导出{% endblock %}
+{% block extra_css %}
+<style>
+  .export-container { max-width: 800px; margin: 0 auto; padding: 20px; }
+  .export-section {
+    background: #fff;
+    border: 1px solid #e1e4e8;
+    border-radius: 8px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .export-section h2 {
+    margin: 0 0 16px 0;
+    font-size: 18px;
+    color: #24292e;
+  }
+  .form-group { margin-bottom: 16px; }
+  .form-group label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+    color: #24292e;
+  }
+  .form-group select,
+  .form-group input {
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .export-buttons {
+    display: flex;
+    gap: 12px;
+    margin-top: 20px;
+  }
+  .btn-export {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .btn-excel {
+    background: #1f883d;
+    color: #fff;
+  }
+  .btn-excel:hover { background: #1a7f37; }
+  .btn-csv {
+    background: #0969da;
+    color: #fff;
+  }
+  .btn-csv:hover { background: #0550ae; }
+  .btn-report {
+    background: #6f42c1;
+    color: #fff;
+  }
+  .btn-report:hover { background: #5a32a3; }
+  .nav-links { margin-bottom: 20px; }
+  .nav-links a { margin-right: 16px; }
+  .help-text {
+    font-size: 12px;
+    color: #6a737d;
+    margin-top: 4px;
+  }
+</style>
+{% endblock %}
+{% block body %}
+<div class="export-container">
+  <nav class="nav-links">
+    <a href="{{ url_for('index') }}">← 返回列表</a>
+    <a href="{{ url_for('analytics_dashboard') }}">数据分析</a>
+  </nav>
+  
+  <h1>📥 数据导出</h1>
+  
+  <div class="export-section">
+    <h2>筛选条件</h2>
+    <form id="exportForm">
+      <div class="form-row">
+        <div class="form-group">
+          <label for="status">抓取状态</label>
+          <select name="status" id="status">
+            <option value="all">全部</option>
+            <option value="ok">成功</option>
+            <option value="failed">失败</option>
+            <option value="retrying">重试中</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="domain">来源域名</label>
+          <select name="domain" id="domain">
+            <option value="all">全部域名</option>
+            {% for d in domains %}
+            <option value="{{ d }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      
+      <div class="form-row">
+        <div class="form-group">
+          <label for="date_from">开始日期</label>
+          <input type="date" name="date_from" id="date_from">
+          <div class="help-text">留空表示不限制</div>
+        </div>
+        <div class="form-group">
+          <label for="date_to">结束日期</label>
+          <input type="date" name="date_to" id="date_to">
+          <div class="help-text">留空表示不限制</div>
+        </div>
+      </div>
+    </form>
+  </div>
+  
+  <div class="export-section">
+    <h2>导出选项</h2>
+    <div class="export-buttons">
+      <button type="button" class="btn-export btn-excel" onclick="exportData('excel')">
+        📊 导出 Excel
+      </button>
+      <button type="button" class="btn-export btn-csv" onclick="exportData('csv')">
+        📄 导出 CSV
+      </button>
+      <a href="{{ url_for('export_report') }}" class="btn-export btn-report">
+        📋 下载分析报告
+      </a>
+    </div>
+    <p class="help-text" style="margin-top: 12px;">
+      Excel 和 CSV 导出将根据上方筛选条件过滤数据。分析报告包含完整的数据统计信息。
+    </p>
+  </div>
+  
+  <div class="export-section">
+    <h2>导出字段说明</h2>
+    <ul>
+      <li><strong>ID</strong> - 记录唯一标识</li>
+      <li><strong>标题</strong> - 招投标标题</li>
+      <li><strong>主域名</strong> - 数据来源网站</li>
+      <li><strong>来源</strong> - 详细来源信息</li>
+      <li><strong>抓取状态</strong> - ok / failed / retrying</li>
+      <li><strong>失败次数</strong> - 抓取重试次数</li>
+      <li><strong>错误信息</strong> - 失败原因</li>
+      <li><strong>更新时间</strong> - 数据入库时间</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+function exportData(format) {
+  const form = document.getElementById('exportForm');
+  const formData = new FormData(form);
+  const params = new URLSearchParams();
+  
+  for (let [key, value] of formData.entries()) {
+    if (value) params.append(key, value);
+  }
+  
+  const url = `/export/${format}?${params.toString()}`;
+  window.location.href = url;
+}
+</script>
+{% endblock %}

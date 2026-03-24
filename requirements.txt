@@ -1,0 +1,11 @@
+flask>=3.0
+loguru>=0.7
+requests>=2.28
+DrissionPage>=4.0
+pandas>=2.0
+openpyxl>=3.1
+readability-lxml>=0.8
+trafilatura>=1.6
+lxml>=4.9
+zhipuai>=2.0
+python-dotenv>=1.0

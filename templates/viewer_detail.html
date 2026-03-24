@@ -1,0 +1,111 @@
+{% extends "viewer_base.html" %}
+{% block title %}ID {{ rid }}{% endblock %}
+{% block extra_css %}
+<style>
+  .meta { margin-bottom: 20px; display: flex; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .excel-panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 20px;
+    overflow: hidden;
+  }
+  .excel-panel h2 {
+    margin: 0;
+    padding: 10px 14px;
+    font-size: 14px;
+    background: #21262d;
+    color: var(--muted);
+  }
+  .kv { display: grid; grid-template-columns: minmax(140px, 220px) 1fr; gap: 0; font-size: 13px; }
+  .kv dt {
+    margin: 0;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    color: var(--accent);
+    font-weight: 500;
+    word-break: break-all;
+  }
+  .kv dd {
+    margin: 0;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    word-break: break-word;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .kv dd.long { max-height: none; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+  .panel h2 { margin: 0; padding: 10px 14px; font-size: 14px; background: #21262d; color: var(--muted); }
+  textarea.source { width: 100%; min-height: 260px; padding: 14px; font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+    background: #0d1117; color: #c9d1d9; border: none; resize: vertical; display: block; }
+  iframe.preview { width: 100%; min-height: 520px; border: none; background: #fff; display: block; }
+  .toolbar { padding: 8px 14px; border-top: 1px solid var(--border); }
+</style>
+{% endblock %}
+{% block body %}
+<nav class="nav"><a href="{{ url_for('index') }}">← 返回列表</a></nav>
+<div class="meta">
+  <h1 style="margin:0;">ID <strong>{{ rid }}</strong></h1>
+  <span class="muted">入库：{{ updated }}</span>
+  <span class="muted">源码 {{ html_len }} 字符</span>
+  <span class="muted" title="去标签后统计">正文字数 <strong>{{ text_stats.total }}</strong>（中{{ text_stats.cn }} 数{{ text_stats.digit }} 英{{ text_stats.alpha }}）</span>
+  <span class="muted">抓取状态: <strong>{{ crawl_status }}</strong>{% if crawl_fail_count %}（已试{{ crawl_fail_count }}次）{% endif %}</span>
+  <a href="{{ render_url }}" target="_blank" class="btn">新窗口渲染</a>
+</div>
+
+{% if crawl_error %}
+<div class="excel-panel" style="border-color:#f85149;">
+  <h2 style="color:#f85149;">抓取失败说明</h2>
+  <p style="padding:12px 16px;margin:0;font-size:13px;white-space:pre-wrap;word-break:break-word;">{{ crawl_error }}</p>
+</div>
+{% endif %}
+
+<div class="excel-panel">
+  <h2>Excel 原始字段（本行同步）</h2>
+  {% if meta_items %}
+  <dl class="kv">
+    {% for k, v in meta_items %}
+    <dt>{{ k }}</dt>
+    <dd class="{% if v and v|string|length > 200 %}long{% endif %}">{{ v if v is not none else '—' }}</dd>
+    {% endfor %}
+  </dl>
+  {% else %}
+  <p class="muted" style="padding:16px;">无 Excel 元数据（请用最新爬虫重新入库）</p>
+  {% endif %}
+</div>
+
+<div class="panel">
+  <h2>抓取正文 HTML 源码</h2>
+  <textarea class="source" readonly id="src" placeholder="加载中…"></textarea>
+  <div class="toolbar">
+    <button type="button" class="btn" onclick="copySrc()">复制源码</button>
+    <span class="muted" id="copyTip"></span>
+  </div>
+</div>
+
+<div class="panel">
+  <h2>正文渲染</h2>
+  <iframe class="preview" title="preview" src="{{ render_url }}"></iframe>
+</div>
+
+<script>
+(function() {
+  var u = {{ raw_url | tojson }};
+  fetch(u).then(function(r) { return r.text(); }).then(function(t) {
+    document.getElementById('src').value = t;
+    document.getElementById('src').placeholder = '';
+  }).catch(function() { document.getElementById('src').placeholder = '加载失败'; });
+})();
+function copySrc() {
+  var t = document.getElementById('src'), v = t.value;
+  if (!v) return;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(v).then(function() {
+      document.getElementById('copyTip').textContent = '已复制';
+      setTimeout(function() { document.getElementById('copyTip').textContent = ''; }, 2000);
+    });
+  } else { t.select(); document.execCommand('copy'); document.getElementById('copyTip').textContent = '已复制'; }
+}
+</script>
+{% endblock %}

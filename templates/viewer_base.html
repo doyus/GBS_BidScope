@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}正文浏览{% endblock %}</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a2332;
+      --text: #e6edf3;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --border: #30363d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      margin: 0;
+      padding: 16px 24px 48px;
+      line-height: 1.5;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .nav { margin-bottom: 20px; font-size: 14px; }
+    .nav a { margin-right: 16px; }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 16px; }
+    .muted { color: var(--muted); font-size: 13px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--card);
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+    }
+    th, td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+    }
+    th { background: #21262d; color: var(--muted); font-weight: 500; font-size: 12px; text-transform: uppercase; }
+    tr:hover td { background: rgba(88, 166, 255, 0.06); }
+    .btn {
+      display: inline-block;
+      padding: 6px 12px;
+      background: var(--accent);
+      color: #fff !important;
+      border-radius: 6px;
+      font-size: 13px;
+      border: none;
+      cursor: pointer;
+    }
+    .btn:hover { filter: brightness(1.1); text-decoration: none; }
+    input[type="text"], input[type="number"], select {
+      padding: 8px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      color: var(--text);
+      font-size: 14px;
+    }
+    .pager { margin-top: 20px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  </style>
+  {% block extra_css %}{% endblock %}
+</head>
+<body>
+  {% with msgs = get_flashed_messages(with_categories=true) %}
+  {% if msgs %}
+  <div style="margin-bottom:16px;">
+    {% for cat, msg in msgs %}
+    <div style="padding:12px 16px;border-radius:8px;margin-bottom:8px;font-size:14px;
+      {% if cat == 'error' %}background:#3d2115;border:1px solid #f85149;color:#ff7b72;
+      {% else %}background:#1a3d2b;border:1px solid #3fb950;color:#56d364;{% endif %}">
+      {{ msg }}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  {% endwith %}
+  {% block body %}{% endblock %}
+</body>
+</html>
