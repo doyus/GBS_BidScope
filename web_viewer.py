@@ -1,16 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-浏览入库正文 + Excel 元数据 + 数据分析平台。
-运行: python web_viewer.py  →  http://127.0.0.1:5050
+浏览入库正文 + Excel 元数据 + 数据分析平台
+运行: python web_viewer.py → http://127.0.0.1:5050
 """
 from __future__ import annotations
 
-import json
-import os
-import re
-import sqlite3
 import io
-from datetime import datetime, timedelta
+import os
+from datetime import datetime
+from typing import Any, Optional
 
 from flask import (
     Flask,
@@ -20,271 +18,220 @@ from flask import (
     redirect,
     render_template,
     request,
-    url_for,
     send_file,
+    url_for,
 )
-
 import pandas as pd
-from data_analytics import (
-    get_full_analytics,
-    get_data_for_export,
+
+from config import config
+from database import get_connection, get_db_path, clear_all_tables, get_table_counts
+from utils import (
     parse_meta,
+    strip_tags_preview,
+    count_text_stats,
+    shorten_url,
+    format_timestamp,
+    build_status_where,
+    get_order_by_sql,
 )
+from data_analytics import get_full_analytics, get_data_for_export
 
 app = Flask(__name__)
 app.config["JSON_AS_ASCII"] = False
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", "local-viewer-dev-key")
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_DB = os.path.join(BASE_DIR, "crawl_local.db")
-
-# 列表优先展示的 Excel 列（有则显示，无则跳过；其余在详情页看全）
-LIST_META_PRIORITY = (
-    "标题",
-    "主域名",
-    "来源",
-    "aus_id",
-    "详情页地址_链接",
-    "Comment地址",
-    "详情页",
-    "Content地址",
-    "源域名",
-)
+app.secret_key = config.flask.secret_key
 
 
-def db_path() -> str:
-    return os.environ.get("SQLITE_DB", DEFAULT_DB)
-
-
-def get_conn():
-    p = db_path()
-    if not os.path.isfile(p):
-        raise FileNotFoundError(f"数据库不存在: {p}")
-    conn = sqlite3.connect(p)
-    cur = conn.execute("PRAGMA table_info(cms_crawl_data_content)")
-    have = {r[1] for r in cur.fetchall()}
-    for col, ddl in (
-        ("excel_meta", "TEXT"),
-        ("crawl_status", "TEXT"),
-        ("crawl_error", "TEXT"),
-        ("crawl_fail_count", "INTEGER DEFAULT 0"),
-    ):
-        if col not in have:
-            conn.execute(
-                f"ALTER TABLE cms_crawl_data_content ADD COLUMN {col} {ddl}"
-            )
-            have.add(col)
-            conn.commit()
-    return conn
-
-
-def parse_meta(raw: str | None) -> dict:
-    if not raw:
-        return {}
-    try:
-        d = json.loads(raw)
-        return d if isinstance(d, dict) else {}
-    except Exception:
-        return {}
-
-
-def strip_tags_preview(s: str, max_len: int = 100) -> str:
-    if not s:
-        return ""
-    t = re.sub(r"<[^>]+>", " ", s)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:max_len] + ("…" if len(t) > max_len else "")
-
-
-def body_text_stats(html: str) -> dict:
-    """去标签后统计：中文(CJK)、数字、字母；不计空格标点。"""
-    plain = re.sub(r"<[^>]+>", " ", html or "")
-    plain = re.sub(r"\s+", " ", plain)
-    cn = len(re.findall(r"[\u4e00-\u9fff]", plain))
-    digit = len(re.findall(r"\d", plain))
-    alpha = len(re.findall(r"[A-Za-z]", plain))
-    return {
-        "cn": cn,
-        "digit": digit,
-        "alpha": alpha,
-        "total": cn + digit + alpha,
-    }
-
-
-def short_url(s: str, n: int = 42) -> str:
-    if not s:
-        return "—"
-    s = str(s).strip()
-    return s[:n] + ("…" if len(s) > n else "")
-
-
-def list_columns_from_meta(sample_metas: list[dict]) -> list[str]:
-    """本页出现过的列名，按 LIST_META_PRIORITY 再补全其余键。"""
+def _get_list_display_keys(metas: list[dict[str, Any]]) -> list[str]:
+    """获取列表页显示的键"""
     all_keys: set[str] = set()
-    for m in sample_metas:
-        all_keys.update(m.keys())
-    ordered = [k for k in LIST_META_PRIORITY if k in all_keys]
+    for meta in metas:
+        all_keys.update(meta.keys())
+
+    ordered = [k for k in config.display.list_meta_priority if k in all_keys]
     rest = sorted(all_keys - set(ordered))
     return ordered + rest
 
 
-# 列表统一按「最后更新时间」从新到旧；兼容秒/毫秒时间戳，无时间排后
-SQL_ORDER_BY_LATEST = (
-    "(CASE WHEN updated_at IS NULL OR TRIM(CAST(updated_at AS TEXT)) IN ('','0') THEN 0.0 "
-    "WHEN ABS(CAST(updated_at AS REAL)) > 1e11 THEN CAST(updated_at AS REAL) / 1000.0 "
-    "ELSE CAST(updated_at AS REAL) END) DESC, id DESC"
-)
+def _build_row_data(
+    raw: tuple, meta: dict[str, Any], display_keys: list[str]
+) -> dict[str, Any]:
+    """构建行数据"""
+    rid, desc, ts, _em = raw[0], raw[1], raw[2], raw[3]
+    crawl_status = raw[4] or ""
+    crawl_error = raw[5] or ""
+    crawl_fail_count = raw[6]
+
+    desc = desc or ""
+    cells = _build_cells(meta, display_keys)
+    stats = count_text_stats(desc)
+    error_short = (crawl_error[:56] + "…") if len(crawl_error) > 56 else crawl_error
+
+    status_class = _get_status_class(crawl_status)
+
+    return {
+        "id": rid,
+        "cells": cells,
+        "preview": strip_tags_preview(desc),
+        "text_total": stats["total"],
+        "text_cn": stats["cn"],
+        "text_digit": stats["digit"],
+        "text_alpha": stats["alpha"],
+        "updated": format_timestamp(ts),
+        "meta_extra_count": max(0, len(meta) - len(display_keys)),
+        "crawl_status": crawl_status or "—",
+        "crawl_error_short": error_short or "—",
+        "crawl_error_full": crawl_error,
+        "crawl_fail_count": crawl_fail_count,
+        "status_class": status_class,
+    }
 
 
-def _status_where(status: str) -> tuple[str, tuple]:
-    """列表筛选：all | ok | failed | retrying | problem"""
-    s = (status or "all").strip().lower()
-    if s == "ok":
-        return (
-            " (IFNULL(crawl_status,'') IN ('ok','') AND (IFNULL(crawl_error,'')='' OR crawl_status='ok') "
-            "AND (LENGTH(IFNULL(description,''))>80 OR crawl_status='ok')) ",
-            (),
-        )
-    if s == "failed":
-        return (" IFNULL(crawl_status,'') = 'failed' ", ())
-    if s == "retrying":
-        return (" IFNULL(crawl_status,'') = 'retrying' ", ())
-    if s == "problem":
-        return (
-            " (IFNULL(crawl_status,'') IN ('failed','retrying') "
-            "OR (IFNULL(crawl_error,'')!='' AND IFNULL(crawl_status,'')!='ok')) ",
-            (),
-        )
-    return (" 1=1 ", ())
+def _build_cells(meta: dict[str, Any], display_keys: list[str]) -> dict[str, str]:
+    """构建单元格数据"""
+    cells: dict[str, str] = {}
+    for key in display_keys:
+        value = meta.get(key)
+        if value is None:
+            cells[key] = "—"
+            continue
+
+        str_val = str(value).strip()
+        url_fields = ("链接", "地址", "URL", "url", "http", "Content", "详情")
+        max_len = 36 if any(x in key for x in url_fields) else 48
+        cells[key] = shorten_url(str_val, max_len)
+
+    return cells
+
+
+def _get_status_class(crawl_status: str) -> str:
+    """获取状态CSS类"""
+    status = crawl_status.strip().lower()
+    if status == "failed":
+        return "row-failed"
+    if status == "retrying":
+        return "row-retrying"
+    return ""
+
+
+def _execute_index_query(
+    conn: Any, query: str, status_filter: str, search: str, per_page: int, offset: int
+) -> tuple[int, list]:
+    """执行首页查询"""
+    cur = conn.cursor()
+    where_clause, _ = build_status_where(status_filter)
+
+    if search:
+        if search.isdigit():
+            return _query_by_id(cur, where_clause, int(search), per_page, offset)
+        return _query_by_search(cur, where_clause, search, per_page, offset)
+
+    return _query_all(cur, where_clause, per_page, offset)
+
+
+def _query_by_id(
+    cur: Any, where_clause: str, content_id: int, per_page: int, offset: int
+) -> tuple[int, list]:
+    """按ID查询"""
+    cur.execute(
+        f"SELECT COUNT(*) FROM {config.database.table_content} "
+        f"WHERE id = ? AND ({where_clause})",
+        (content_id,),
+    )
+    total = cur.fetchone()[0]
+
+    cur.execute(
+        f"""SELECT id, description, updated_at, excel_meta,
+           IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
+           IFNULL(crawl_fail_count,0) AS cf
+           FROM {config.database.table_content}
+           WHERE id = ? AND ({where_clause})
+           ORDER BY {get_order_by_sql()} LIMIT ? OFFSET ?""",
+        (content_id, per_page, offset),
+    )
+    return total, cur.fetchall()
+
+
+def _query_by_search(
+    cur: Any, where_clause: str, search: str, per_page: int, offset: int
+) -> tuple[int, list]:
+    """按关键词搜索"""
+    like = f"%{search}%"
+
+    cur.execute(
+        f"""SELECT COUNT(*) FROM {config.database.table_content}
+           WHERE ({where_clause}) AND (
+           description LIKE ? OR IFNULL(excel_meta,'') LIKE ?
+           OR IFNULL(crawl_error,'') LIKE ?)""",
+        (like, like, like),
+    )
+    total = cur.fetchone()[0]
+
+    cur.execute(
+        f"""SELECT id, description, updated_at, excel_meta,
+           IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
+           IFNULL(crawl_fail_count,0) AS cf
+           FROM {config.database.table_content}
+           WHERE ({where_clause}) AND (
+           description LIKE ? OR IFNULL(excel_meta,'') LIKE ?
+           OR IFNULL(crawl_error,'') LIKE ?)
+           ORDER BY {get_order_by_sql()} LIMIT ? OFFSET ?""",
+        (like, like, like, per_page, offset),
+    )
+    return total, cur.fetchall()
+
+
+def _query_all(
+    cur: Any, where_clause: str, per_page: int, offset: int
+) -> tuple[int, list]:
+    """查询全部"""
+    cur.execute(
+        f"SELECT COUNT(*) FROM {config.database.table_content} WHERE ({where_clause})"
+    )
+    total = cur.fetchone()[0]
+
+    cur.execute(
+        f"""SELECT id, description, updated_at, excel_meta,
+           IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
+           IFNULL(crawl_fail_count,0) AS cf
+           FROM {config.database.table_content}
+           WHERE ({where_clause})
+           ORDER BY {get_order_by_sql()} LIMIT ? OFFSET ?""",
+        (per_page, offset),
+    )
+    return total, cur.fetchall()
 
 
 @app.route("/")
-def index():
+def index() -> str:
+    """首页列表"""
     page = max(1, int(request.args.get("page", 1)))
-    q = (request.args.get("q") or "").strip()
+    search = (request.args.get("q") or "").strip()
     status_filter = (request.args.get("status") or "all").strip()
-    per_page = min(100, max(10, int(request.args.get("per", 30))))
+    per_page = min(
+        config.display.per_page_max,
+        max(10, int(request.args.get("per", config.display.per_page_default))),
+    )
 
     try:
-        conn = get_conn()
+        conn = get_connection()
     except FileNotFoundError as e:
         return render_template("viewer_error.html", error=str(e)), 503
 
-    sw, _ = _status_where(status_filter)
-    off = (page - 1) * per_page
-    cur = conn.cursor()
-    if q:
-        if q.isdigit():
-            cur.execute(
-                f"SELECT COUNT(*) FROM cms_crawl_data_content WHERE id = ? AND ({sw})",
-                (int(q),),
-            )
-            total = cur.fetchone()[0]
-            cur.execute(
-                f"""SELECT id, description, updated_at, excel_meta,
-                   IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
-                   IFNULL(crawl_fail_count,0) AS cf
-                   FROM cms_crawl_data_content WHERE id = ? AND ({sw})
-                   ORDER BY {SQL_ORDER_BY_LATEST} LIMIT ? OFFSET ?""",
-                (int(q), per_page, off),
-            )
-        else:
-            like = f"%{q}%"
-            cur.execute(
-                f"""SELECT COUNT(*) FROM cms_crawl_data_content
-                   WHERE ({sw}) AND (
-                   description LIKE ? OR IFNULL(excel_meta,'') LIKE ?
-                   OR IFNULL(crawl_error,'') LIKE ?)""",
-                (like, like, like),
-            )
-            total = cur.fetchone()[0]
-            cur.execute(
-                f"""SELECT id, description, updated_at, excel_meta,
-                   IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
-                   IFNULL(crawl_fail_count,0) AS cf
-                   FROM cms_crawl_data_content
-                   WHERE ({sw}) AND (
-                   description LIKE ? OR IFNULL(excel_meta,'') LIKE ?
-                   OR IFNULL(crawl_error,'') LIKE ?)
-                   ORDER BY {SQL_ORDER_BY_LATEST} LIMIT ? OFFSET ?""",
-                (like, like, like, per_page, off),
-            )
-    else:
-        cur.execute(f"SELECT COUNT(*) FROM cms_crawl_data_content WHERE ({sw})")
-        total = cur.fetchone()[0]
-        cur.execute(
-            f"""SELECT id, description, updated_at, excel_meta,
-               IFNULL(crawl_status,'') AS cs, IFNULL(crawl_error,'') AS ce,
-               IFNULL(crawl_fail_count,0) AS cf
-               FROM cms_crawl_data_content
-               WHERE ({sw})
-               ORDER BY {SQL_ORDER_BY_LATEST} LIMIT ? OFFSET ?""",
-            (per_page, off),
-        )
-
-    raw_rows = cur.fetchall()
+    offset = (page - 1) * per_page
+    total, raw_rows = _execute_index_query(
+        conn, "", status_filter, search, per_page, offset
+    )
     conn.close()
 
-    metas = [parse_meta(r[3]) for r in raw_rows]
-    # 列表只展示部分列，避免过宽
-    priority_keys = [k for k in LIST_META_PRIORITY]
-    extra_from_page = list_columns_from_meta(metas)
-    display_keys = []
-    for k in priority_keys:
-        if k in extra_from_page and k not in display_keys:
-            display_keys.append(k)
-    for k in extra_from_page:
-        if k not in display_keys and len(display_keys) < 8:
-            display_keys.append(k)
+    metas = [parse_meta(row[3]) for row in raw_rows]
+    display_keys = _get_list_display_keys(metas)[: config.display.max_display_columns]
 
-    rows = []
-    for raw, meta in zip(raw_rows, metas):
-        rid, desc, ts, _em = raw[0], raw[1], raw[2], raw[3]
-        cstat, cerr, cfc = (raw[4] or ""), (raw[5] or ""), raw[6]
-        desc = desc or ""
-        cells = {}
-        for k in display_keys:
-            v = meta.get(k)
-            if v is None:
-                cells[k] = "—"
-            else:
-                sv = str(v).strip()
-                if any(
-                    x in k
-                    for x in ("链接", "地址", "URL", "url", "http", "Content", "详情")
-                ):
-                    cells[k] = short_url(sv, 36)
-                else:
-                    cells[k] = short_url(sv, 48) if len(sv) > 48 else sv or "—"
-        st = body_text_stats(desc)
-        err_short = (cerr[:56] + "…") if len(cerr) > 56 else cerr
-        st_raw = (cstat or "").strip().lower()
-        if st_raw == "failed":
-            row_cls = "row-failed"
-        elif st_raw == "retrying":
-            row_cls = "row-retrying"
-        else:
-            row_cls = ""
-        rows.append(
-            {
-                "id": rid,
-                "cells": cells,
-                "preview": strip_tags_preview(desc),
-                "text_total": st["total"],
-                "text_cn": st["cn"],
-                "text_digit": st["digit"],
-                "text_alpha": st["alpha"],
-                "updated": _fmt_ts(ts),
-                "meta_extra_count": max(0, len(meta) - len(display_keys)),
-                "crawl_status": cstat or "—",
-                "crawl_error_short": err_short or "—",
-                "crawl_error_full": cerr,
-                "crawl_fail_count": cfc,
-                "status_class": row_cls,
-            }
-        )
+    rows = [
+        _build_row_data(raw, meta, display_keys) for raw, meta in zip(raw_rows, metas)
+    ]
 
     pages = max(1, (total + per_page - 1) // per_page)
+
     return render_template(
         "viewer_index.html",
         rows=rows,
@@ -293,95 +240,97 @@ def index():
         pages=pages,
         total=total,
         per_page=per_page,
-        q=q,
-        db_file=db_path(),
+        q=search,
+        db_file=get_db_path(),
         status_filter=status_filter,
     )
 
 
-def _fmt_ts(ts) -> str:
-    if ts is None:
-        return "—"
-    try:
-        if ts > 1e12:
-            ts = ts / 1000.0
-        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return str(ts)
-
-
 @app.route("/item/<int:rid>")
-def item(rid: int):
+def item(rid: int) -> str:
+    """详情页"""
     try:
-        conn = get_conn()
+        conn = get_connection()
     except FileNotFoundError as e:
         return render_template("viewer_error.html", error=str(e)), 503
+
     cur = conn.execute(
-        """SELECT id, description, updated_at, excel_meta,
-           IFNULL(crawl_status,''), IFNULL(crawl_error,''), IFNULL(crawl_fail_count,0)
-           FROM cms_crawl_data_content WHERE id = ?""",
+        f"""SELECT id, description, updated_at, excel_meta,
+           IFNULL(crawl_status,''), IFNULL(crawl_error,''),
+           IFNULL(crawl_fail_count,0)
+           FROM {config.database.table_content} WHERE id = ?""",
         (rid,),
     )
     row = cur.fetchone()
     conn.close()
+
     if not row:
         abort(404)
-    _id, desc, ts, meta_raw = row[0], row[1], row[2], row[3]
-    crawl_status, crawl_error, crawl_fail_count = row[4], row[5], row[6]
-    desc = desc or ""
-    meta = parse_meta(meta_raw)
+
+    meta = parse_meta(row[3])
     meta_items = sorted(meta.items(), key=lambda x: x[0])
-    st = body_text_stats(desc)
+    stats = count_text_stats(row[1] or "")
+
     return render_template(
         "viewer_detail.html",
-        rid=_id,
-        html_len=len(desc),
-        text_stats=st,
-        updated=_fmt_ts(ts),
+        rid=row[0],
+        html_len=len(row[1] or ""),
+        text_stats=stats,
+        updated=format_timestamp(row[2]),
         render_url=url_for("render_html", rid=rid),
         raw_url=url_for("api_raw_html", rid=rid),
         meta_items=meta_items,
-        crawl_status=crawl_status or "—",
-        crawl_error=crawl_error or "",
-        crawl_fail_count=crawl_fail_count or 0,
+        crawl_status=row[4] or "—",
+        crawl_error=row[5] or "",
+        crawl_fail_count=row[6] or 0,
     )
 
 
 @app.route("/api/raw/<int:rid>")
-def api_raw_html(rid: int):
+def api_raw_html(rid: int) -> Response:
+    """获取原始HTML"""
     try:
-        conn = get_conn()
+        conn = get_connection()
     except FileNotFoundError:
         abort(503)
+
     cur = conn.execute(
-        "SELECT description FROM cms_crawl_data_content WHERE id = ?", (rid,)
+        f"SELECT description FROM {config.database.table_content} WHERE id = ?", (rid,)
     )
     row = cur.fetchone()
     conn.close()
+
     if not row:
         abort(404)
+
     html = row[0] or ""
     if isinstance(html, bytes):
         html = html.decode("utf-8", errors="replace")
+
     return Response(html, mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/render/<int:rid>")
-def render_html(rid: int):
+def render_html(rid: int) -> Response:
+    """渲染HTML"""
     try:
-        conn = get_conn()
+        conn = get_connection()
     except FileNotFoundError:
         abort(503)
+
     cur = conn.execute(
-        "SELECT description FROM cms_crawl_data_content WHERE id = ?", (rid,)
+        f"SELECT description FROM {config.database.table_content} WHERE id = ?", (rid,)
     )
     row = cur.fetchone()
     conn.close()
+
     if not row or not row[0]:
         abort(404)
+
     html = row[0]
     if isinstance(html, bytes):
         html = html.decode("utf-8", errors="replace")
+
     return Response(
         html,
         mimetype="text/html; charset=utf-8",
@@ -389,44 +338,13 @@ def render_html(rid: int):
     )
 
 
-# 清空时依次删除的表（爬虫相关，不可恢复）
-_TABLES_TO_CLEAR = (
-    "cms_crawl_data_content",
-    "crawl_url_dedup",
-    "domain_learned_xpath",
-    "domain_json_html_path",
-)
-
-
-def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for t in _TABLES_TO_CLEAR:
-        try:
-            out[t] = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-        except sqlite3.OperationalError:
-            out[t] = -1
-    return out
-
-
-def _clear_crawl_tables(conn: sqlite3.Connection) -> dict[str, int]:
-    """返回各表删除前条数。"""
-    before = {}
-    for t in _TABLES_TO_CLEAR:
-        try:
-            n = conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
-            conn.execute(f"DELETE FROM {t}")
-            before[t] = n
-        except sqlite3.OperationalError:
-            before[t] = -1
-    conn.commit()
-    return before
-
-
 @app.route("/admin/clear", methods=["GET", "POST"])
-def admin_clear():
+def admin_clear() -> str:
+    """清空数据管理"""
     confirm_word = "清空"
+
     try:
-        conn = get_conn()
+        conn = get_connection()
     except FileNotFoundError as e:
         return render_template("viewer_error.html", error=str(e)), 503
 
@@ -435,218 +353,212 @@ def admin_clear():
             conn.close()
             flash("验证失败：请在输入框中准确输入「清空」二字", "error")
             return redirect(url_for("admin_clear"))
-        counts = _clear_crawl_tables(conn)
+
+        counts = clear_all_tables(conn)
         conn.close()
-        main_n = counts.get("cms_crawl_data_content", 0)
+
+        main_count = counts.get(config.database.table_content, 0)
         flash(
-            f"已清空：正文 {main_n} 条；URL 去重 / XPath / JSON 路径缓存已一并删除。",
+            f"已清空：正文 {main_count} 条；URL 去重 / XPath / JSON 路径缓存已一并删除。",
             "success",
         )
         return redirect(url_for("index"))
 
-    counts = _table_counts(conn)
+    counts = get_table_counts(conn)
     conn.close()
+
     return render_template(
         "viewer_admin_clear.html",
         counts=counts,
-        db_file=db_path(),
+        db_file=get_db_path(),
         confirm_word=confirm_word,
     )
 
 
 @app.route("/health")
-def health():
-    return {"ok": True, "db": os.path.isfile(db_path())}
+def health() -> dict[str, Any]:
+    """健康检查"""
+    return {"ok": True, "db": os.path.isfile(get_db_path())}
 
-
-# ==================== 数据分析平台功能 ====================
 
 @app.route("/analytics")
-def analytics_dashboard():
+def analytics_dashboard() -> str:
     """数据分析仪表盘"""
     try:
-        report = get_full_analytics(db_path())
+        report = get_full_analytics(get_db_path())
     except Exception as e:
         return render_template("viewer_error.html", error=str(e)), 500
-    
+
     return render_template("viewer_analytics.html", report=report)
 
 
 @app.route("/api/analytics/data")
-def api_analytics_data():
-    """API: 获取分析数据（用于图表）"""
+def api_analytics_data() -> dict[str, Any]:
+    """API: 获取分析数据"""
     try:
-        report = get_full_analytics(db_path())
-        return report
+        return get_full_analytics(get_db_path())
     except Exception as e:
         return {"error": str(e)}, 500
 
 
 @app.route("/api/analytics/daily-trend")
-def api_daily_trend():
-    """API: 每日抓取趋势数据"""
+def api_daily_trend() -> dict[str, Any]:
+    """API: 每日抓取趋势"""
     try:
-        conn = get_conn()
-        df = pd.read_sql_query("""
-            SELECT updated_at, crawl_status 
-            FROM cms_crawl_data_content
-            WHERE updated_at IS NOT NULL
-        """, conn)
+        conn = get_connection()
+        df = pd.read_sql_query(
+            f"""SELECT updated_at, crawl_status 
+               FROM {config.database.table_content}
+               WHERE updated_at IS NOT NULL""",
+            conn,
+        )
         conn.close()
-        
-        def parse_ts(ts):
-            try:
-                ts_val = float(ts)
-                if ts_val > 1e12:
-                    ts_val = ts_val / 1000.0
-                return datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d")
-            except:
-                return None
-        
-        df["date"] = df["updated_at"].apply(parse_ts)
+
+        df["date"] = df["updated_at"].apply(_parse_date_from_ts)
         df = df[df["date"].notna()]
-        
+
         daily = df.groupby(["date", "crawl_status"]).size().unstack(fill_value=0)
         daily["total"] = daily.sum(axis=1)
-        
-        result = {
+
+        return {
             "dates": daily.index.tolist(),
             "total": daily.get("total", [0] * len(daily)).tolist(),
             "success": daily.get("ok", [0] * len(daily)).tolist(),
             "failed": daily.get("failed", [0] * len(daily)).tolist(),
         }
-        return result
     except Exception as e:
         return {"error": str(e)}, 500
 
 
-@app.route("/api/analytics/domain-stats")
-def api_domain_stats():
-    """API: 域名统计数据"""
+def _parse_date_from_ts(ts: Any) -> Optional[str]:
+    """从时间戳解析日期"""
+    if ts is None:
+        return None
     try:
-        conn = get_conn()
-        df = pd.read_sql_query("""
-            SELECT excel_meta, crawl_status 
-            FROM cms_crawl_data_content
-        """, conn)
+        ts_val = float(ts)
+        if ts_val > 1e12:
+            ts_val = ts_val / 1000.0
+        return datetime.fromtimestamp(ts_val).strftime("%Y-%m-%d")
+    except (TypeError, ValueError):
+        return None
+
+
+@app.route("/api/analytics/domain-stats")
+def api_domain_stats() -> dict[str, Any]:
+    """API: 域名统计"""
+    try:
+        conn = get_connection()
+        df = pd.read_sql_query(
+            f"""SELECT excel_meta, crawl_status 
+               FROM {config.database.table_content}""",
+            conn,
+        )
         conn.close()
-        
+
         df["domain"] = df["excel_meta"].apply(
             lambda x: parse_meta(x).get("主域名", "未知")
         )
-        
-        domain_stats = df.groupby(["domain", "crawl_status"]).size().unstack(fill_value=0)
+
+        domain_stats = (
+            df.groupby(["domain", "crawl_status"]).size().unstack(fill_value=0)
+        )
         domain_stats["total"] = domain_stats.sum(axis=1)
         domain_stats = domain_stats.sort_values("total", ascending=False).head(15)
-        
-        result = {
+
+        return {
             "domains": domain_stats.index.tolist(),
             "total": domain_stats.get("total", [0] * len(domain_stats)).tolist(),
             "success": domain_stats.get("ok", [0] * len(domain_stats)).tolist(),
             "failed": domain_stats.get("failed", [0] * len(domain_stats)).tolist(),
         }
-        return result
     except Exception as e:
         return {"error": str(e)}, 500
 
 
 @app.route("/api/analytics/content-length")
-def api_content_length():
+def api_content_length() -> dict[str, Any]:
     """API: 内容长度分布"""
     try:
-        conn = get_conn()
-        df = pd.read_sql_query("""
-            SELECT description 
-            FROM cms_crawl_data_content
-            WHERE description IS NOT NULL
-        """, conn)
+        conn = get_connection()
+        df = pd.read_sql_query(
+            f"""SELECT description 
+               FROM {config.database.table_content}
+               WHERE description IS NOT NULL""",
+            conn,
+        )
         conn.close()
-        
-        def calc_length(html):
-            if not html:
-                return 0
-            plain = re.sub(r"<[^>]+>", " ", html)
-            plain = re.sub(r"\s+", " ", plain)
-            return len(re.findall(r"[\u4e00-\u9fff]", plain)) + len(re.findall(r"\d", plain)) + len(re.findall(r"[A-Za-z]", plain))
-        
-        df["length"] = df["description"].apply(calc_length)
-        
-        bins = [0, 100, 500, 1000, 5000, float('inf')]
+
+        df["length"] = df["description"].apply(
+            lambda x: count_text_stats(x)["total"] if x else 0
+        )
+
+        bins = [0, 100, 500, 1000, 5000, float("inf")]
         labels = ["0-100", "100-500", "500-1000", "1000-5000", "5000+"]
         df["range"] = pd.cut(df["length"], bins=bins, labels=labels, right=False)
-        
+
         dist = df["range"].value_counts().sort_index()
-        
-        return {
-            "ranges": labels,
-            "counts": [int(dist.get(r, 0)) for r in labels]
-        }
+
+        return {"ranges": labels, "counts": [int(dist.get(r, 0)) for r in labels]}
     except Exception as e:
         return {"error": str(e)}, 500
 
 
 @app.route("/export")
-def export_page():
+def export_page() -> str:
     """数据导出页面"""
     try:
-        conn = get_conn()
-        
-        # 获取所有域名
+        conn = get_connection()
+
         domains = set()
-        cur = conn.execute("SELECT excel_meta FROM cms_crawl_data_content WHERE excel_meta IS NOT NULL")
+        cur = conn.execute(
+            f"SELECT excel_meta FROM {config.database.table_content} "
+            f"WHERE excel_meta IS NOT NULL"
+        )
         for row in cur.fetchall():
             meta = parse_meta(row[0])
-            domain = meta.get("主域名", "未知")
-            domains.add(domain)
+            domains.add(meta.get("主域名", "未知"))
         conn.close()
-        
+
         return render_template("viewer_export.html", domains=sorted(domains))
     except Exception as e:
         return render_template("viewer_error.html", error=str(e)), 500
 
 
 @app.route("/export/excel")
-def export_excel():
-    """导出 Excel"""
+def export_excel() -> Response:
+    """导出Excel"""
     try:
         status = request.args.get("status", "all")
         domain = request.args.get("domain", "all")
         date_from = request.args.get("date_from")
         date_to = request.args.get("date_to")
-        
-        df = get_data_for_export(db_path(), status, domain if domain != "all" else None, date_from, date_to)
-        
+
+        df = get_data_for_export(
+            get_db_path(),
+            status,
+            domain if domain != "all" else None,
+            date_from,
+            date_to,
+        )
+
         if df.empty:
             flash("没有符合条件的数据", "error")
             return redirect(url_for("export_page"))
-        
-        # 准备导出数据
-        export_data = []
-        for _, row in df.iterrows():
-            meta = row.get("meta_dict", {})
-            export_data.append({
-                "ID": row["id"],
-                "标题": meta.get("标题", ""),
-                "主域名": meta.get("主域名", ""),
-                "来源": meta.get("来源", ""),
-                "抓取状态": row["crawl_status"] or "ok",
-                "失败次数": row["crawl_fail_count"],
-                "错误信息": row["crawl_error"] or "",
-                "更新时间": row["parsed_time"].strftime("%Y-%m-%d %H:%M:%S") if row["parsed_time"] else "",
-            })
-        
+
+        export_data = _prepare_export_data(df)
         export_df = pd.DataFrame(export_data)
-        
+
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine="openpyxl") as writer:
             export_df.to_excel(writer, index=False, sheet_name="招投标数据")
         output.seek(0)
-        
+
+        filename = f"招投标数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
         return send_file(
             output,
             mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             as_attachment=True,
-            download_name=f"招投标数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+            download_name=filename,
         )
     except Exception as e:
         flash(f"导出失败: {str(e)}", "error")
@@ -654,25 +566,53 @@ def export_excel():
 
 
 @app.route("/export/csv")
-def export_csv():
-    """导出 CSV"""
+def export_csv() -> Response:
+    """导出CSV"""
     try:
         status = request.args.get("status", "all")
         domain = request.args.get("domain", "all")
         date_from = request.args.get("date_from")
         date_to = request.args.get("date_to")
-        
-        df = get_data_for_export(db_path(), status, domain if domain != "all" else None, date_from, date_to)
-        
+
+        df = get_data_for_export(
+            get_db_path(),
+            status,
+            domain if domain != "all" else None,
+            date_from,
+            date_to,
+        )
+
         if df.empty:
             flash("没有符合条件的数据", "error")
             return redirect(url_for("export_page"))
-        
-        # 准备导出数据
-        export_data = []
-        for _, row in df.iterrows():
-            meta = row.get("meta_dict", {})
-            export_data.append({
+
+        export_data = _prepare_export_data(df)
+        export_df = pd.DataFrame(export_data)
+
+        output = io.StringIO()
+        export_df.to_csv(output, index=False, encoding="utf-8-sig")
+        output.seek(0)
+
+        filename = f"招投标数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            output.getvalue(),
+            mimetype="text/csv; charset=utf-8-sig",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
+    except Exception as e:
+        flash(f"导出失败: {str(e)}", "error")
+        return redirect(url_for("export_page"))
+
+
+def _prepare_export_data(df: pd.DataFrame) -> list[dict[str, Any]]:
+    """准备导出数据"""
+    export_data = []
+    for _, row in df.iterrows():
+        meta = row.get("meta_dict", {})
+        parsed_time = row.get("parsed_time")
+
+        export_data.append(
+            {
                 "ID": row["id"],
                 "标题": meta.get("标题", ""),
                 "主域名": meta.get("主域名", ""),
@@ -680,41 +620,28 @@ def export_csv():
                 "抓取状态": row["crawl_status"] or "ok",
                 "失败次数": row["crawl_fail_count"],
                 "错误信息": row["crawl_error"] or "",
-                "更新时间": row["parsed_time"].strftime("%Y-%m-%d %H:%M:%S") if row["parsed_time"] else "",
-            })
-        
-        export_df = pd.DataFrame(export_data)
-        
-        output = io.StringIO()
-        export_df.to_csv(output, index=False, encoding="utf-8-sig")
-        output.seek(0)
-        
-        return Response(
-            output.getvalue(),
-            mimetype="text/csv; charset=utf-8-sig",
-            headers={
-                "Content-Disposition": f"attachment; filename=招投标数据_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                "更新时间": (
+                    parsed_time.strftime("%Y-%m-%d %H:%M:%S") if parsed_time else ""
+                ),
             }
         )
-    except Exception as e:
-        flash(f"导出失败: {str(e)}", "error")
-        return redirect(url_for("export_page"))
+    return export_data
 
 
 @app.route("/export/report")
-def export_report():
-    """导出分析报告（HTML格式，可打印为PDF）"""
+def export_report() -> Response:
+    """导出分析报告"""
     try:
-        report = get_full_analytics(db_path())
-        
-        html_content = render_template("viewer_report.html", report=report, generated_at=datetime.now())
-        
+        report = get_full_analytics(get_db_path())
+        html_content = render_template(
+            "viewer_report.html", report=report, generated_at=datetime.now()
+        )
+
+        filename = f"数据分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
         return Response(
             html_content,
             mimetype="text/html; charset=utf-8",
-            headers={
-                "Content-Disposition": f"attachment; filename=数据分析报告_{datetime.now().strftime('%Y%m%d_%H%M%S')}.html"
-            }
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
     except Exception as e:
         flash(f"报告生成失败: {str(e)}", "error")
@@ -722,6 +649,6 @@ def export_report():
 
 
 if __name__ == "__main__":
-    print("数据库:", db_path())
-    print("打开 http://127.0.0.1:5050")
-    app.run(host="127.0.0.1", port=int(os.environ.get("PORT", "5050")), debug=True)
+    print("数据库:", get_db_path())
+    print(f"打开 http://{config.flask.host}:{config.flask.port}")
+    app.run(host=config.flask.host, port=config.flask.port, debug=config.flask.debug)

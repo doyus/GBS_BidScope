@@ -9,3 +9,8 @@ trafilatura>=1.6
 lxml>=4.9
 zhipuai>=2.0
 python-dotenv>=1.0
+
+pytest>=7.0
+pytest-cov>=4.0
+black>=23.0
+ruff>=0.1.0
