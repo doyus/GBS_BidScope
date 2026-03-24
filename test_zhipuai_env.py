@@ -113,7 +113,9 @@ def main() -> None:
             sys.exit(1)
 
     print("=" * 60)
-    print("结论：本解释器可正常导入 zhipuai。请用上述 executable 运行 crawl_update_content.py。")
+    print(
+        "结论：本解释器可正常导入 zhipuai。请用上述 executable 运行 crawl_update_content.py。"
+    )
 
 
 if __name__ == "__main__":

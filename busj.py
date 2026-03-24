@@ -1,7 +1,7 @@
 import requests
 from readability import Document
 
-url = 'http://www.ygcgfw.com/gggs/001001/001001003/20260318/03ecdd9b-2fdb-4d70-8d1f-c0d68925ce76.html'
+url = "http://www.ygcgfw.com/gggs/001001/001001003/20260318/03ecdd9b-2fdb-4d70-8d1f-c0d68925ce76.html"
 
 # 1. 添加请求头，模拟浏览器，防止被反爬
 headers = {
@@ -22,7 +22,7 @@ try:
     print("标题:", doc.title())
     print("-" * 30)
     print("正文预览:")
-    print(doc.text_content()[:500]) # 打印前500字
+    print(doc.text_content()[:500])  # 打印前500字
 except Exception as e:
     print(f"提取失败: {e}")
     # 调试信息：如果失败，可能是编码问题，尝试手动指定编码
