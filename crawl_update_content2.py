@@ -32,6 +32,7 @@ from collections import defaultdict, deque
 # 尝试加载 .env 文件
 try:
     from dotenv import load_dotenv
+
     load_dotenv()
 except ImportError:
     pass
@@ -45,8 +46,12 @@ from lxml import etree
 from lxml import html as lxml_html
 from readability import Document
 
-EXCEL_PATH = os.environ.get("EXCEL_PATH", os.path.join(os.path.dirname(__file__), "1.xlsx"))
-SQLITE_DB = os.environ.get("SQLITE_DB", os.path.join(os.path.dirname(__file__), "crawl_local.db"))
+EXCEL_PATH = os.environ.get(
+    "EXCEL_PATH", os.path.join(os.path.dirname(__file__), "1.xlsx")
+)
+SQLITE_DB = os.environ.get(
+    "SQLITE_DB", os.path.join(os.path.dirname(__file__), "crawl_local.db")
+)
 ZHIPU_API_KEY = os.environ.get("ZHIPU_API_KEY", "")
 ZHIPU_MODEL = os.environ.get("ZHIPU_MODEL", "glm-4-flash-250414")
 
@@ -145,14 +150,14 @@ def migrate_cms_excel_meta_column(conn: sqlite3.Connection) -> None:
         ("crawl_fail_count", "INTEGER DEFAULT 0"),
     ):
         if col not in have:
-            conn.execute(
-                f"ALTER TABLE cms_crawl_data_content ADD COLUMN {col} {ddl}"
-            )
+            conn.execute(f"ALTER TABLE cms_crawl_data_content ADD COLUMN {col} {ddl}")
             added = True
             have.add(col)
     if added:
         conn.commit()
-        logger.info("已升级表结构：cms_crawl_data_content 新增列（含 crawl_status/crawl_error）")
+        logger.info(
+            "已升级表结构：cms_crawl_data_content 新增列（含 crawl_status/crawl_error）"
+        )
 
 
 def valid_text_cjk_digit_alpha(html_or_text: str) -> int:
@@ -328,12 +333,12 @@ def _series_has_urls(s: pd.Series, min_hits: int = 2, sample: int = 80) -> bool:
     if len(s) == 0:
         return False
     hits = s.str.match(r"https?://", case=False, na=False).sum()
-    return hits >= min_hits or (
-        hits >= 1 and hits >= max(1, len(s) // 10)
-    )
+    return hits >= min_hits or (hits >= 1 and hits >= max(1, len(s) // 10))
 
 
-def detect_url_columns(df: pd.DataFrame, force_names: Optional[list[str]] = None) -> list[str]:
+def detect_url_columns(
+    df: pd.DataFrame, force_names: Optional[list[str]] = None
+) -> list[str]:
     """按优先级返回「详情链接」列名列表。"""
     if force_names:
         out = []
@@ -350,7 +355,11 @@ def detect_url_columns(df: pd.DataFrame, force_names: Optional[list[str]] = None
                     break
         if out:
             return out
-        logger.error("指定的 --url-col 在表中不存在: {} | 当前表头: {}", force_names, list(df.columns))
+        logger.error(
+            "指定的 --url-col 在表中不存在: {} | 当前表头: {}",
+            force_names,
+            list(df.columns),
+        )
         return []
 
     scored: list[tuple[int, str]] = []
@@ -368,7 +377,13 @@ def detect_url_columns(df: pd.DataFrame, force_names: Optional[list[str]] = None
                 score += 15
         if any(k in cstr for k in ("详情", "正文", "公告")):
             score += 8
-        if "content" in cl or "链接" in cstr or "url" in cl or "link" in cl or "地址" in cstr:
+        if (
+            "content" in cl
+            or "链接" in cstr
+            or "url" in cl
+            or "link" in cl
+            or "地址" in cstr
+        ):
             score += 5
         if score > 0:
             scored.append((score, col))
@@ -739,7 +754,9 @@ def _bidding_json_to_article_html(data: Any) -> str:
             nm = esc(p.get("processName"))
             ct = esc(p.get("createTime"))
             if nm:
-                lis.append(f"<li>{nm}" + (f" <span>{ct}</span>" if ct else "") + "</li>")
+                lis.append(
+                    f"<li>{nm}" + (f" <span>{ct}</span>" if ct else "") + "</li>"
+                )
         if lis:
             parts.append(
                 '<section class="json-field"><h2>流程节点</h2><ul>'
@@ -762,7 +779,10 @@ def _bidding_json_to_article_html(data: Any) -> str:
                     names.append(esc(it["fileName"]))
             if names:
                 parts.append(
-                    section(label, "<ul>" + "".join(f"<li>{n}</li>" for n in names) + "</ul>")
+                    section(
+                        label,
+                        "<ul>" + "".join(f"<li>{n}</li>" for n in names) + "</ul>",
+                    )
                 )
 
     file_block("采购需求文件", inner.get("cgxqFile"))
@@ -794,7 +814,8 @@ def _bidding_json_to_article_html(data: Any) -> str:
                 extra.append((str(k), v.strip()))
     if extra:
         rows = "".join(
-            f"<tr><th>{html_module.escape(a)}</th><td>{esc(b)}</td></tr>" for a, b in extra[:25]
+            f"<tr><th>{html_module.escape(a)}</th><td>{esc(b)}</td></tr>"
+            for a, b in extra[:25]
         )
         parts.append(
             f'<section class="json-field json-extra"><h2>其他信息</h2><table>{rows}</table></section>'
@@ -802,11 +823,7 @@ def _bidding_json_to_article_html(data: Any) -> str:
 
     if not parts:
         return ""
-    return (
-        '<article class="from-api-json-detail">'
-        + "\n".join(parts)
-        + "</article>"
-    )
+    return '<article class="from-api-json-detail">' + "\n".join(parts) + "</article>"
 
 
 def extract_pre_wrapped_json_as_article(html: str) -> str:
@@ -1125,7 +1142,9 @@ def ask_llm_json_html_path(api_key: str, page_url: str, json_snippet: str) -> st
             messages=[
                 {
                     "role": "user",
-                    "content": prompt + "\n\n--- JSON ---\n" + json_snippet[:LLM_JSON_MAX],
+                    "content": prompt
+                    + "\n\n--- JSON ---\n"
+                    + json_snippet[:LLM_JSON_MAX],
                 }
             ],
             response_format={"type": "json_object"},
@@ -1134,18 +1153,11 @@ def ask_llm_json_html_path(api_key: str, page_url: str, json_snippet: str) -> st
         raw = (resp.choices[0].message.content or "").strip()
         data = json.loads(raw)
         if isinstance(data, dict):
-            p = (
-                data.get("json_path")
-                or data.get("path")
-                or data.get("jsonPath")
-                or ""
-            )
+            p = data.get("json_path") or data.get("path") or data.get("jsonPath") or ""
             return str(p).strip()
     except Exception:
         logger.exception("智谱 json_path 解析失败")
-    m = re.search(
-        r'"json_path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw or "", re.I
-    )
+    m = re.search(r'"json_path"\s*:\s*"((?:[^"\\]|\\.)*)"', raw or "", re.I)
     if m:
         return m.group(1).replace('\\"', '"').strip()
     return ""
@@ -1199,7 +1211,9 @@ def extract_main_from_json(
 
     if zhipu_key and domain not in domain_json_llm_asked:
         domain_json_llm_asked.add(domain)
-        logger.info("[LLM-JSON] 域名「{}」请求正文 HTML 的 json_path（本批一次）", domain)
+        logger.info(
+            "[LLM-JSON] 域名「{}」请求正文 HTML 的 json_path（本批一次）", domain
+        )
         snippet = json_text_for_llm or stringify_json_sample(data)
         jp = ask_llm_json_html_path(zhipu_key, page_url, snippet)
         if jp:
@@ -1275,7 +1289,12 @@ def ask_llm_xpath(api_key: str, page_url: str, html_snippet: str) -> str:
     try:
         resp = client.chat.completions.create(
             model=ZHIPU_MODEL,
-            messages=[{"role": "user", "content": prompt + "\n\n--- HTML 开始 ---\n" + snippet}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt + "\n\n--- HTML 开始 ---\n" + snippet,
+                }
+            ],
             response_format={"type": "json_object"},
             max_tokens=500,
         )
@@ -1288,7 +1307,7 @@ def ask_llm_xpath(api_key: str, page_url: str, html_snippet: str) -> str:
         logger.exception("智谱 XPath 请求解析失败")
     m = re.search(r'"xpath"\s*:\s*"((?:[^"\\]|\\.)*)"', raw, re.I)
     if m:
-        return m.group(1).replace("\\\"", '"').strip()
+        return m.group(1).replace('\\"', '"').strip()
     return ""
 
 
@@ -1576,9 +1595,7 @@ def smart_extract_main_html(
                 save_learned_xpath(conn, domain, xp, page_url)
                 return frag, "llm_xpath"
             save_learned_xpath(conn, domain, xp, page_url)
-            logger.warning(
-                "[LLM] XPath 已写入库，当前页效果一般: {}…", xp[:100]
-            )
+            logger.warning("[LLM] XPath 已写入库，当前页效果一般: {}…", xp[:100])
 
     learned2 = get_learned_xpath(conn, domain)
     if learned2:
@@ -1743,7 +1760,9 @@ def main():
     init_sqlite(args.db)
     conn = sqlite3.connect(args.db)
     migrate_cms_excel_meta_column(conn)
-    zhipu_key = "" if args.no_llm else (ZHIPU_API_KEY or os.environ.get("ZHIPUAI_API_KEY", ""))
+    zhipu_key = (
+        "" if args.no_llm else (ZHIPU_API_KEY or os.environ.get("ZHIPUAI_API_KEY", ""))
+    )
     if not zhipu_key and not args.no_llm:
         logger.warning(
             "未设置 ZHIPUAI_API_KEY，大模型 XPath 不可用（可加 --no-llm 关闭本提示）"
@@ -1762,7 +1781,12 @@ def main():
             header=args.header,
         )
     except Exception as e:
-        logger.exception("读取 Excel 失败: {} | sheet={} header={}", args.excel, sheet_key, args.header)
+        logger.exception(
+            "读取 Excel 失败: {} | sheet={} header={}",
+            args.excel,
+            sheet_key,
+            args.header,
+        )
         sys.exit(1)
 
     df = normalize_columns(df)
@@ -1838,7 +1862,7 @@ def main():
     )
 
     end = len(df) if args.limit <= 0 else min(len(df), args.start + args.limit)
-    rows = df.iloc[args.start:end]
+    rows = df.iloc[args.start : end]
     if len(rows) == 0:
         logger.warning("没有待处理行（检查 Excel 或 --start / --limit）")
         try:
@@ -1898,7 +1922,11 @@ def main():
         "间隔策略 | 同一条任务失败再试: {}s | 整表轮次间隔: {}（{}）",
         args.attempt_wait_sec,
         f"{args.retry_wait_sec}s" if args.loop else "—",
-        "每轮结束休眠后重读Excel" if args.loop else "单轮结束即退出，加 --loop 才用轮次间隔",
+        (
+            "每轮结束休眠后重读Excel"
+            if args.loop
+            else "单轮结束即退出，加 --loop 才用轮次间隔"
+        ),
     )
 
     sql_success = """INSERT INTO cms_crawl_data_content(
@@ -1981,7 +2009,11 @@ def main():
                         "SELECT description FROM cms_crawl_data_content WHERE id = ?",
                         (cid,),
                     ).fetchone()
-                    if dr and dr[0] and valid_text_cjk_digit_alpha(dr[0]) >= MIN_TEXT_LEN:
+                    if (
+                        dr
+                        and dr[0]
+                        and valid_text_cjk_digit_alpha(dr[0]) >= MIN_TEXT_LEN
+                    ):
                         if not args.dry_run:
                             conn.execute(
                                 """UPDATE cms_crawl_data_content SET
@@ -2005,7 +2037,10 @@ def main():
                     (first_id,),
                 ).fetchone()
                 reuse_html = dr[0] if dr else None
-                if not reuse_html or valid_text_cjk_digit_alpha(reuse_html) < MIN_VALID_LOOSE:
+                if (
+                    not reuse_html
+                    or valid_text_cjk_digit_alpha(reuse_html) < MIN_VALID_LOOSE
+                ):
                     conn.execute(
                         "DELETE FROM crawl_url_dedup WHERE url_key = ?", (url_key,)
                     )
@@ -2055,8 +2090,10 @@ def main():
                 domain_json_llm_asked.discard(dom)
             force_dom = True
 
-        max_retries = 1 if (args.dry_run or args.no_crawl_retry) else max(
-            1, int(args.max_crawl_retries)
+        max_retries = (
+            1
+            if (args.dry_run or args.no_crawl_retry)
+            else max(1, int(args.max_crawl_retries))
         )
         attempt_wait = 0 if args.dry_run else max(0, int(args.attempt_wait_sec))
 
@@ -2080,9 +2117,7 @@ def main():
                 if not args.no_json_fetch:
                     jd, jtxt, http_code = try_fetch_json(url)
                     if http_code in (404, 410):
-                        last_err = (
-                            f"HTTP {http_code} 资源不存在，有效字不足(<{MIN_TEXT_LEN})，本条不再重试"
-                        )
+                        last_err = f"HTTP {http_code} 资源不存在，有效字不足(<{MIN_TEXT_LEN})，本条不再重试"
                         stop_retry = True
                     elif jd is not None:
                         got_json_first = True
@@ -2161,9 +2196,7 @@ def main():
                             f"需智谱请配 ZHIPUAI_API_KEY 且勿 --no-llm"
                         )
                     else:
-                        last_err = (
-                            f"有效字={vc}<{MIN_TEXT_LEN}；来源={classify_extraction_source(method)}；路径={method}"
-                        )
+                        last_err = f"有效字={vc}<{MIN_TEXT_LEN}；来源={classify_extraction_source(method)}；路径={method}"
                         if (
                             used_browser
                             and last_page_html
@@ -2171,9 +2204,7 @@ def main():
                             and vc < MIN_TEXT_LEN
                         ):
                             stop_retry = True
-                            last_err = (
-                                f"页面为404/不存在类且有效字={vc}<{MIN_TEXT_LEN}，不再重试"
-                            )
+                            last_err = f"页面为404/不存在类且有效字={vc}<{MIN_TEXT_LEN}，不再重试"
             except Exception as e:
                 if _is_page_disconnected_error(e):
                     row_disconnect_recoveries += 1
@@ -2185,9 +2216,7 @@ def main():
                         row_disconnect_recoveries,
                     )
                     if row_disconnect_recoveries > 40:
-                        last_err = (
-                            f"页面反复断连，已重启浏览器仍失败(>{40}次) | {type(e).__name__}"
-                        )
+                        last_err = f"页面反复断连，已重启浏览器仍失败(>{40}次) | {type(e).__name__}"
                     else:
                         attempt -= 1
                         time.sleep(min(2.0, max(0.3, float(args.attempt_wait_sec))))
@@ -2315,7 +2344,9 @@ def main():
                     header=args.header,
                 )
             except Exception as e:
-                logger.exception("第 {} 轮读取 Excel 失败: {} | 稍后按轮次间隔重试", round_no, e)
+                logger.exception(
+                    "第 {} 轮读取 Excel 失败: {} | 稍后按轮次间隔重试", round_no, e
+                )
                 continue
             df = normalize_columns(df)
             url_cols_new = detect_url_columns(df, force_url if force_url else None)
@@ -2328,7 +2359,7 @@ def main():
             url_cols.clear()
             url_cols.extend(url_cols_new)
             end = len(df) if args.limit <= 0 else min(len(df), args.start + args.limit)
-            rows = df.iloc[args.start:end]
+            rows = df.iloc[args.start : end]
             if len(rows) == 0:
                 logger.warning("第 {} 轮：无数据行", round_no)
                 continue
